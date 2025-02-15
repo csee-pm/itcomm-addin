@@ -1,22 +1,45 @@
-# Use Node.js for build stage
-FROM node:20 as build
+# Build stage
+FROM node:20-slim as build
 WORKDIR /app
 
-# Copy package.json and install dependencies
-COPY package.json package-lock.json ./
-RUN npm install
+# Install dependencies
+COPY package*.json ./
+RUN npm ci
 
-# Copy the rest of the code and build it
+# Copy source and build
 COPY . .
 RUN npm run build
 
-# Use Nginx for production
-FROM nginx:latest
-COPY --from=build /app/dist /usr/share/nginx/html
-COPY ./nginx.conf /etc/nginx/nginx.conf
+# Production stage
+FROM nginx:stable-alpine
+WORKDIR /usr/share/nginx/html
 
-# Expose the correct port
+# Create nginx user if it doesn't exist
+RUN adduser -D -H -u 1001 -s /sbin/nologin nginx-user
+
+# Copy built assets from build stage
+COPY --from=build /app/dist .
+
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# Set correct permissions
+RUN chown -R nginx-user:nginx-user /usr/share/nginx/html && \
+    chown -R nginx-user:nginx-user /var/cache/nginx && \
+    chown -R nginx-user:nginx-user /var/log/nginx && \
+    chown -R nginx-user:nginx-user /etc/nginx/conf.d && \
+    touch /var/run/nginx.pid && \
+    chown -R nginx-user:nginx-user /var/run/nginx.pid
+
+# Use non-root user
+USER nginx-user
+
+# Expose port for Cloud Run
 EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s \
+    CMD wget --quiet --tries=1 --spider http://localhost:8080/taskpane.html || exit 1
 
 # Start Nginx
 CMD ["nginx", "-g", "daemon off;"]
